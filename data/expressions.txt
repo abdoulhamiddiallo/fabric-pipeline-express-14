@@ -1,0 +1,108 @@
+PIPELINE 14 : MACHU PICCHU, UN HUMAIN DANS LA BOUCLE
+Chaque valeur est sur sa propre ligne : copiez la ligne entière, sans le titre entre crochets.
+
+==================== Objets ====================
+
+[Espace de travail]
+Fabric_Pipeline_14
+
+[Lakehouse]
+LH_Inka
+
+[Dossier dans Fichiers]
+requests
+
+[Entrepôt]
+WH_Inka
+
+[Pipeline]
+PL_Inka
+
+==================== Land requests (Copy data) ====================
+
+[Nom de l'activité]
+Land requests
+
+[Source : dossier]
+requests
+
+[Source : fichier]
+requests_2026-11-02.csv
+
+[Destination : nouvelle table, action Remplacer]
+requests
+
+==================== Refresh endpoint (Refresh SQL analytics endpoint) ====================
+
+[Nom de l'activité]
+Refresh endpoint
+
+[Connexion Lakehouse, compte d'organisation : nom]
+CN_Lakehouse
+
+==================== Build quota (Script sur WH_Inka, type Requête) ====================
+
+[Nom de l'activité]
+Build quota
+
+[Build quota]
+WITH r AS (SELECT CAST(request_id AS int) AS id, circuit, CAST(visitors AS int) AS v, CAST(requested_at AS datetime2) AS t FROM LH_Inka.dbo.requests), c AS (SELECT circuit, cap FROM (VALUES ('C1 Terrasse haute', 700), ('C2 Classique', 1100), ('C3 Huayna Picchu', 200), ('C4 Montagne', 400)) AS x(circuit, cap)), k AS (SELECT r.circuit, r.v, c.cap, SUM(r.v) OVER (PARTITION BY r.circuit ORDER BY r.t, r.id ROWS UNBOUNDED PRECEDING) AS run FROM r JOIN c ON c.circuit = r.circuit), s AS (SELECT circuit, cap, COUNT(*) AS n, SUM(CASE WHEN run <= cap THEN 1 ELSE 0 END) AS n_ok, SUM(v) AS req, SUM(CASE WHEN run <= cap THEN v ELSE 0 END) AS granted FROM k GROUP BY circuit, cap) SELECT SUM(n) AS requests, SUM(n_ok) AS accepted, SUM(req) AS requested, SUM(granted) AS granted, SUM(cap) AS capacity, CAST(100.0 * SUM(granted) / SUM(cap) AS decimal(4,1)) AS fill_pct, (SELECT TOP 1 circuit FROM s ORDER BY req * 1.0 / cap DESC) AS hottest, (SELECT TOP 1 CAST(req * 1.0 / cap AS decimal(4,2)) FROM s ORDER BY req * 1.0 / cap DESC) AS hottest_ratio FROM s;
+
+==================== Approve quota (Approval, type Outlook 365) ====================
+
+[Nom de l'activité]
+Approve quota
+
+[Délai d'expiration (onglet Général)]
+0.01:00:00
+
+[Requête]
+Publier les quotas Machu Picchu du 2 novembre 2026 ?
+
+[Description (contenu dynamique)]
+@{activity('Build quota').output.resultSets[0].rows[0].granted} visiteurs acceptés sur @{activity('Build quota').output.resultSets[0].rows[0].requested} demandés, pour @{activity('Build quota').output.resultSets[0].rows[0].capacity} places (@{activity('Build quota').output.resultSets[0].rows[0].fill_pct} %). @{activity('Build quota').output.resultSets[0].rows[0].accepted} demandes acceptées sur @{activity('Build quota').output.resultSets[0].rows[0].requests}. Circuit le plus disputé : @{activity('Build quota').output.resultSets[0].rows[0].hottest} (x@{activity('Build quota').output.resultSets[0].rows[0].hottest_ratio}). Approuver publie les quotas, refuser ne publie rien.
+
+==================== Publish quota (Script sur WH_Inka, type Non-requête, flèche verte) ====================
+
+[Nom de l'activité]
+Publish quota
+
+[Publish quota]
+IF OBJECT_ID('dbo.published_quota') IS NULL CREATE TABLE dbo.published_quota (visit_date date, request_id int, agency varchar(100), circuit varchar(60), visitors int, published_at datetime2(0));
+DELETE FROM dbo.published_quota WHERE visit_date = '2026-11-02';
+WITH r AS (SELECT CAST(request_id AS int) AS id, agency, circuit, CAST(visitors AS int) AS v, CAST(requested_at AS datetime2) AS t FROM LH_Inka.dbo.requests), c AS (SELECT circuit, cap FROM (VALUES ('C1 Terrasse haute', 700), ('C2 Classique', 1100), ('C3 Huayna Picchu', 200), ('C4 Montagne', 400)) AS x(circuit, cap)), k AS (SELECT r.id, r.agency, r.circuit, r.v, c.cap, SUM(r.v) OVER (PARTITION BY r.circuit ORDER BY r.t, r.id ROWS UNBOUNDED PRECEDING) AS run FROM r JOIN c ON c.circuit = r.circuit) INSERT INTO dbo.published_quota SELECT '2026-11-02', id, agency, circuit, v, SYSUTCDATETIME() FROM k WHERE run <= cap;
+
+==================== Post published (Teams, après Publish quota) ====================
+
+[Nom de l'activité]
+Post published
+
+[Titre]
+Machu Picchu
+
+[Publié (contenu dynamique)]
+Machu Picchu, 2 novembre 2026 : quotas approuvés et publiés. @{activity('Build quota').output.resultSets[0].rows[0].granted} visiteurs pour @{activity('Build quota').output.resultSets[0].rows[0].capacity} places (@{activity('Build quota').output.resultSets[0].rows[0].fill_pct} %), @{activity('Build quota').output.resultSets[0].rows[0].accepted} demandes acceptées sur @{activity('Build quota').output.resultSets[0].rows[0].requests}. Le plus disputé : @{activity('Build quota').output.resultSets[0].rows[0].hottest} (x@{activity('Build quota').output.resultSets[0].rows[0].hottest_ratio}).
+
+==================== Post rejected (Teams, flèche rouge depuis Approve quota) ====================
+
+[Nom de l'activité]
+Post rejected
+
+[Titre]
+Machu Picchu
+
+[Refusé (contenu dynamique)]
+Machu Picchu, 2 novembre 2026 : quotas refusés, rien n'a été publié. @{activity('Build quota').output.resultSets[0].rows[0].requested} visiteurs demandés pour @{activity('Build quota').output.resultSets[0].rows[0].capacity} places.
+
+==================== Plan B (sans activité Approval) ====================
+
+[Paramètre de pipeline : nom, type Bool]
+approve
+
+[If Condition : expression]
+@pipeline().parameters.approve
+
+==================== Vérifier dans WH_Inka ====================
+
+[Contrôle]
+SELECT circuit, COUNT(*) AS demandes, SUM(visitors) AS visiteurs FROM dbo.published_quota WHERE visit_date = '2026-11-02' GROUP BY circuit ORDER BY circuit;
