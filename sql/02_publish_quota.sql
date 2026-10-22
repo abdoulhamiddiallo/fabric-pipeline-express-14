@@ -1,0 +1,5 @@
+-- Publish quota : exécuté seulement si l'activité Approval est approuvée (Script, type Non-requête)
+-- Crée la table au premier passage, efface la date, puis réécrit les demandes acceptées : rejouable sans doublon
+IF OBJECT_ID('dbo.published_quota') IS NULL CREATE TABLE dbo.published_quota (visit_date date, request_id int, agency varchar(100), circuit varchar(60), visitors int, published_at datetime2(0));
+DELETE FROM dbo.published_quota WHERE visit_date = '2026-11-02';
+WITH r AS (SELECT CAST(request_id AS int) AS id, agency, circuit, CAST(visitors AS int) AS v, CAST(requested_at AS datetime2) AS t FROM LH_Inka.dbo.requests), c AS (SELECT circuit, cap FROM (VALUES ('C1 Terrasse haute', 700), ('C2 Classique', 1100), ('C3 Huayna Picchu', 200), ('C4 Montagne', 400)) AS x(circuit, cap)), k AS (SELECT r.id, r.agency, r.circuit, r.v, c.cap, SUM(r.v) OVER (PARTITION BY r.circuit ORDER BY r.t, r.id ROWS UNBOUNDED PRECEDING) AS run FROM r JOIN c ON c.circuit = r.circuit) INSERT INTO dbo.published_quota SELECT '2026-11-02', id, agency, circuit, v, SYSUTCDATETIME() FROM k WHERE run <= cap;
